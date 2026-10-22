@@ -102,9 +102,10 @@ impl Clone for LeftClick {
 /// A handle to the system tray.
 ///
 /// Holds the concrete backend of the current platform (behind an `Arc`), so
-/// calls dispatch statically. Cheaply cloneable and `Send`; safe to share
-/// across the application. Must be created inside `application().run(|cx| …)`
-/// on the main thread.
+/// calls dispatch statically. Cheaply cloneable, and bound to the thread that
+/// created it, like every other handle into application state: the native
+/// handles behind it belong to that thread. Must be created inside
+/// `application().run(|cx| …)` on the main thread.
 pub struct Tray {
     backend: PlatformTrayBackend,
 }

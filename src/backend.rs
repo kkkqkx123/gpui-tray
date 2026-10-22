@@ -9,8 +9,9 @@ use crate::LeftClick;
 /// A platform tray implementation.
 ///
 /// [`Tray`] forwards to the concrete backend of the current platform through
-/// [`crate::PlatformTrayBackend`], so implementations must be `Send + Sync`.
-pub trait TrayBackend: Send + Sync {
+/// [`crate::PlatformTrayBackend`]. The native handles a backend owns belong to
+/// the thread that created them, so a backend is not `Send`.
+pub trait TrayBackend {
     /// Whether a working tray is present on this platform/session.
     fn is_available(&self) -> bool;
 

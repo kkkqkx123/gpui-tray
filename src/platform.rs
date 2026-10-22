@@ -27,7 +27,7 @@ mod null;
 ///
 /// Exactly one inner backend exists per build, so every call forwards through
 /// `Arc<T>` with static dispatch — no trait object is involved. The `Arc`
-/// keeps [`crate::Tray`] cheaply cloneable and `Send + Sync`.
+/// keeps [`crate::Tray`] cheaply cloneable.
 #[derive(Clone)]
 pub struct PlatformTrayBackend {
     #[cfg(target_os = "linux")]

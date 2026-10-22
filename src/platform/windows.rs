@@ -1,9 +1,8 @@
 //! Windows backend: `tray-icon` (Win32 `Shell_NotifyIcon` + native `HMENU`).
 //!
-//! **Status: M3 — requires verification on Windows.** The channel + bridge task
-//! dispatch architecture mirrors the other backends; the native `tray-icon` wiring
-//! below is a faithful starting point that may need minor adjustments against the
-//! pinned `tray-icon` release.
+//! The tray icon owns a hidden window on the thread that creates it, which is
+//! the GPUI thread. `tray-icon` reports menu clicks through a global receiver;
+//! a dedicated thread pumps it and forwards the clicks to the bridge task.
 
 #![cfg(target_os = "windows")]
 
@@ -11,27 +10,23 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::thread;
 
-use parking_lot::Mutex;
-
-use flume::Sender;
 use gpui::{App, AsyncApp, SharedString};
+use parking_lot::Mutex;
 use tray_icon::{
-    TrayIconBuilder,
-    menu::{Menu, MenuEvent, MenuItem, Submenu},
+    Icon, TrayIconBuilder,
+    menu::{CheckMenuItem, IsMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu},
 };
 
 use crate::backend::TrayBackend;
 use crate::event::TrayEvent;
 use crate::icon::TrayIconData;
-use crate::LeftClick;
 use crate::menu::{split_menu, MenuItemId, TrayMenu, TrayMenuItem};
 use crate::AnyAction;
+use crate::LeftClick;
 
 pub struct WindowsBackend {
-    #[allow(dead_code)]
     tray: tray_icon::TrayIcon,
     shared: Arc<Mutex<WinShared>>,
-    tx: Sender<TrayEvent>,
 }
 
 struct WinShared {
@@ -40,51 +35,90 @@ struct WinShared {
     available: bool,
 }
 
-fn build_menu(items: &[TrayMenuItem]) -> Menu {
-    let mut menu = Menu::new();
-    for item in items {
-        match item {
-            TrayMenuItem::Separator => {
-                menu.append(&tray_icon::menu::MenuItem::separator());
-            }
-            TrayMenuItem::Submenu(sub) => {
-                let submenu = build_menu(&sub.items);
-                let _ = menu.append(&Submenu::with_id(
-                    sub.label.to_string(),
-                    sub.label.to_string(),
-                    true,
-                    &[&submenu],
-                ));
-            }
-            TrayMenuItem::Item(it) => {
-                let id = it.id.0.to_string();
-                let _ = menu.append(&MenuItem::with_id(
-                    id,
-                    it.label.to_string(),
-                    it.enabled,
-                    None::<&str>,
-                ));
+/// A menu that items can be appended to.
+///
+/// `muda` gives `Menu` and `Submenu` their own `append` methods instead of a
+/// shared trait, so the two are unified here.
+trait MenuSink {
+    fn push(&self, item: &dyn IsMenuItem);
+}
+
+impl MenuSink for Menu {
+    fn push(&self, item: &dyn IsMenuItem) {
+        let _ = self.append(item);
+    }
+}
+
+impl MenuSink for Submenu {
+    fn push(&self, item: &dyn IsMenuItem) {
+        let _ = self.append(item);
+    }
+}
+
+/// Builds the native menu, giving every submenu an id of its own.
+struct MenuBuilder {
+    next_submenu: usize,
+}
+
+impl MenuBuilder {
+    fn build(&mut self, items: &[TrayMenuItem]) -> Menu {
+        let menu = Menu::new();
+        self.fill(&menu, items);
+        menu
+    }
+
+    fn fill(&mut self, sink: &dyn MenuSink, items: &[TrayMenuItem]) {
+        for item in items {
+            match item {
+                TrayMenuItem::Separator => sink.push(&PredefinedMenuItem::separator()),
+                TrayMenuItem::Submenu(sub) => {
+                    let id = format!("__tray_submenu_{}", self.next_submenu);
+                    self.next_submenu += 1;
+                    let submenu = Submenu::with_id(id, &sub.label, true);
+                    self.fill(&submenu, &sub.items);
+                    sink.push(&submenu);
+                }
+                TrayMenuItem::Item(it) => {
+                    let id = it.id.0.to_string();
+                    if let Some(checked) = it.checked {
+                        sink.push(&CheckMenuItem::with_id(
+                            id,
+                            &it.label,
+                            it.enabled,
+                            checked,
+                            None,
+                        ));
+                    } else {
+                        sink.push(&MenuItem::with_id(
+                            id,
+                            &it.label,
+                            it.enabled,
+                            None,
+                        ));
+                    }
+                }
             }
         }
     }
-    menu
 }
 
-pub fn create_backend(cx: &mut App) -> anyhow::Result<Box<dyn TrayBackend>> {
+pub fn create_backend(cx: &mut App) -> anyhow::Result<WindowsBackend> {
     let (tx, rx) = flume::unbounded::<TrayEvent>();
 
     // `tray-icon` reports menu clicks through a global receiver; pump it on a
     // dedicated thread and forward to the bridge over the (Send) flume channel.
+    let tx_thread = tx.clone();
     thread::spawn(move || {
-        while let Ok(event) = MenuEvent::receiver().recv() {
-            let id = MenuItemId(SharedString::from(event.id.to_string()));
-            let _ = tx.send(TrayEvent::MenuItemActivated { id });
+        let receiver = MenuEvent::receiver();
+        while let Ok(event) = receiver.recv() {
+            let id = MenuItemId(SharedString::from(event.id.0));
+            let _ = tx_thread.send(TrayEvent::MenuItemActivated { id });
         }
     });
 
-    let tray_menu = build_menu(&[]);
+    let tray_menu = MenuBuilder { next_submenu: 0 }.build(&[]);
     let tray = TrayIconBuilder::new()
-        .with_menu(tray_menu)
+        .with_menu(Box::new(tray_menu))
         .build()
         .map_err(|e| anyhow::anyhow!("failed to create tray icon: {e}"))?;
 
@@ -96,7 +130,7 @@ pub fn create_backend(cx: &mut App) -> anyhow::Result<Box<dyn TrayBackend>> {
 
     let app = cx.to_async();
     let shared_task = Arc::clone(&shared);
-    let _task = cx.spawn(|_cx: &mut AsyncApp| {
+    let _task = cx.spawn(move |_cx: &mut AsyncApp| {
         let app = app.clone();
         let shared = shared_task;
         let rx = rx;
@@ -132,7 +166,7 @@ pub fn create_backend(cx: &mut App) -> anyhow::Result<Box<dyn TrayBackend>> {
         }
     });
 
-    Ok(WindowsBackend { tray, shared, tx })
+    Ok(WindowsBackend { tray, shared })
 }
 
 impl TrayBackend for WindowsBackend {
@@ -142,7 +176,7 @@ impl TrayBackend for WindowsBackend {
 
     fn set_visible(&self, visible: bool) {
         self.shared.lock().available = visible;
-        self.tray.set_visible(visible);
+        let _ = self.tray.set_visible(visible);
     }
 
     fn set_icon(&self, icon: Option<TrayIconData>) {
@@ -150,10 +184,9 @@ impl TrayBackend for WindowsBackend {
             // `tray-icon` expects BGRA; convert from the tray's sRGBA. A production
             // build should also cache and reuse the `Icon` handle.
             let rgba = icon.rgba;
-            let _ = self.tray.set_icon(Some(
-                tray_icon::icon::Icon::from_rgba(rgba, icon.width, icon.height)
-                    .map_err(|e| anyhow::anyhow!("icon: {e}")),
-            ));
+            let icon = Icon::from_rgba(rgba, icon.width, icon.height)
+                .map_err(|e| anyhow::anyhow!("icon: {e}"));
+            let _ = self.tray.set_icon(icon.ok());
         }
     }
 
@@ -165,8 +198,11 @@ impl TrayBackend for WindowsBackend {
 
     fn set_menu(&self, menu: TrayMenu) {
         let (menu, handlers) = split_menu(menu);
-        let native = build_menu(&menu.items);
-        self.tray.set_menu(Some(native));
+        let native = MenuBuilder {
+            next_submenu: 0,
+        }
+        .build(&menu.items);
+        self.tray.set_menu(Some(Box::new(native)));
         self.shared.lock().handlers = handlers;
     }
 

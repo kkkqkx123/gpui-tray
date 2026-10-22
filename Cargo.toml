@@ -1,0 +1,67 @@
+[package]
+name = "gpui-tray"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+description = "System tray / menu-bar icon support for GPUI applications"
+repository = "https://github.com/kkkqkx123/gpui-tray"
+keywords = ["gpui", "tray", "system-tray", "menu-bar", "desktop"]
+categories = ["gui"]
+readme = "README.md"
+
+# This crate is an independent repository, not a gpui-kit workspace member.
+[workspace]
+members = ["examples/tray_demo"]
+
+[features]
+default = ["gpui-kit"]
+# Select exactly one GPUI flavor; `lib.rs` rejects any other combination.
+gpui-kit = ["dep:gpui-kit-backend"]
+gpui-fast = ["dep:gpui-fast-backend"]
+
+[dependencies]
+# Every flavor publishes the same `gpui` API under a different package name.
+# The selected one must be the GPUI the application itself builds against,
+# because every operation takes that flavor's `gpui::App`.
+#
+# `gpui-kit` is the GPUI Kit snapshot, pinned to the exact release the
+# application resolves. A caret requirement would drift applications onto a
+# snapshot their `gpui::App` was not compiled against.
+gpui-kit-backend = { package = "gpui-pre", version = "=0.3.9", default-features = false, optional = true }
+gpui-fast-backend = { package = "gpui-fast", version = "0.1.10", default-features = false, optional = true }
+anyhow = "1"
+log = "0.4"
+flume = "0.11"
+parking_lot = "0.12"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+ksni = { version = "0.3", default-features = false, features = ["async-io"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-app-kit = "0.3.2"
+objc2-foundation = "0.3"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+tray-icon = "0.20"
+
+[lints.rust]
+missing_docs = "warn"
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+almost_complete_range = "allow"
+arc_with_non_send_sync = "allow"
+borrowed_box = "allow"
+dbg_macro = "deny"
+let_underscore_future = "allow"
+manual_is_multiple_of = "allow"
+map_entry = "allow"
+module_inception = "allow"
+non_canonical_partial_ord_impl = "allow"
+reversed_empty_ranges = "allow"
+single_range_in_vec_init = "allow"
+style = { level = "allow", priority = -1 }
+todo = "deny"
+type_complexity = "allow"
+useless_conversion = "allow"

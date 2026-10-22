@@ -1,0 +1,21 @@
+[package]
+name = "tray_demo"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Demonstrates the gpui-tray system tray / menu-bar integration"
+
+[dependencies]
+# The published GPUI Kit release supplies the application shell and the GPUI
+# types. The tray crate must be built against the same GPUI, so the flavor
+# features below select one GPUI for both.
+gpui-kit = { version = "0.8", default-features = false }
+gpui-tray = { path = "../..", default-features = false }
+
+[features]
+default = ["gpui-kit"]
+# GPUI Kit's `gpui-pre` snapshot, the default backend.
+gpui-kit = ["gpui-tray/gpui-kit"]
+# GPUI Fast. It replaces the default backend, so it replaces the flavor
+# feature too: build it with `--no-default-features --features gpui-fast`.
+gpui-fast = ["gpui-tray/gpui-fast", "gpui-kit/gpui-fast"]

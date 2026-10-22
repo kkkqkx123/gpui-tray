@@ -1,0 +1,5 @@
+# The `gpui-pre` snapshot uses unstable `std::hint::cold_path`, so the crate
+# must build on the beta toolchain. Keep this in sync with the GPUI Kit
+# workspace, which pins the same channel.
+[toolchain]
+channel = "beta"

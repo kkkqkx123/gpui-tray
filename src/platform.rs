@@ -8,9 +8,11 @@ use std::sync::Arc;
 use gpui::App;
 
 use crate::backend::TrayBackend;
-use crate::icon::TrayIconData;
-use crate::menu::TrayMenu;
-use crate::LeftClick;
+use crate::error::TrayError;
+use crate::icon::TrayIcon;
+use crate::menu::ResolvedMenu;
+use crate::options::TrayOptions;
+use crate::runtime::RuntimeShared;
 
 #[cfg(target_os = "linux")]
 mod linux;
@@ -27,7 +29,8 @@ mod null;
 ///
 /// Exactly one inner backend exists per build, so every call forwards through
 /// `Arc<T>` with static dispatch — no trait object is involved. The `Arc`
-/// keeps [`crate::Tray`] cheaply cloneable.
+/// keeps [`crate::Tray`] cheaply cloneable. The bridge task is owned by the
+/// inner backend and cancelled when it is dropped.
 #[derive(Clone)]
 pub struct PlatformTrayBackend {
     #[cfg(target_os = "linux")]
@@ -43,25 +46,29 @@ pub struct PlatformTrayBackend {
 impl PlatformTrayBackend {
     /// Creates the backend of the current platform.
     ///
-    /// Never blocks on desktop startup; if the platform tray is unavailable the
-    /// backend reports that through [`TrayBackend::is_available`] and the host
-    /// degrades gracefully.
-    pub fn new(cx: &mut App) -> anyhow::Result<Self> {
+    /// The bridge task is created here and owned by the returned backend —
+    /// never detached — so [`TrayBackend::shutdown`] can stop the event loop
+    /// deterministically.
+    pub(crate) fn new(
+        cx: &mut App,
+        options: &TrayOptions,
+        shared: Arc<RuntimeShared>,
+    ) -> Result<Self, TrayError> {
         #[cfg(target_os = "linux")]
         return Ok(Self {
-            inner: Arc::new(linux::create_backend(cx)?),
+            inner: Arc::new(linux::create_backend(cx, options, shared)?),
         });
         #[cfg(target_os = "macos")]
         return Ok(Self {
-            inner: Arc::new(macos::create_backend(cx)?),
+            inner: Arc::new(macos::create_backend(cx, options, shared)?),
         });
         #[cfg(target_os = "windows")]
         return Ok(Self {
-            inner: Arc::new(windows::create_backend(cx)?),
+            inner: Arc::new(windows::create_backend(cx, options, shared)?),
         });
         #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
         return Ok(Self {
-            inner: Arc::new(null::create_backend(cx)?),
+            inner: Arc::new(null::create_backend(cx, options, shared)?),
         });
     }
 }
@@ -73,23 +80,35 @@ impl TrayBackend for PlatformTrayBackend {
         self.inner.is_available()
     }
 
-    fn set_visible(&self, visible: bool) {
-        self.inner.set_visible(visible);
+    fn set_visible(&self, visible: bool) -> Result<(), TrayError> {
+        self.inner.set_visible(visible)
     }
 
-    fn set_icon(&self, icon: Option<TrayIconData>) {
-        self.inner.set_icon(icon);
+    fn set_icon(&self, icon: Option<TrayIcon>) -> Result<(), TrayError> {
+        self.inner.set_icon(icon)
     }
 
-    fn set_tooltip(&self, tooltip: Option<gpui::SharedString>) {
-        self.inner.set_tooltip(tooltip);
+    fn set_tooltip(&self, tooltip: Option<gpui::SharedString>) -> Result<(), TrayError> {
+        self.inner.set_tooltip(tooltip)
     }
 
-    fn set_menu(&self, menu: TrayMenu) {
-        self.inner.set_menu(menu);
+    fn set_title(&self, title: Option<gpui::SharedString>) -> Result<(), TrayError> {
+        self.inner.set_title(title)
     }
 
-    fn set_left_click_action(&self, behavior: LeftClick) {
-        self.inner.set_left_click_action(behavior);
+    fn set_menu(&self, menu: &ResolvedMenu) -> Result<(), TrayError> {
+        self.inner.set_menu(menu)
+    }
+
+    fn show_menu(&self) -> Result<(), TrayError> {
+        self.inner.show_menu()
+    }
+
+    fn request_attention(&self, attention: bool) -> Result<(), TrayError> {
+        self.inner.request_attention(attention)
+    }
+
+    fn shutdown(&self) {
+        self.inner.shutdown();
     }
 }

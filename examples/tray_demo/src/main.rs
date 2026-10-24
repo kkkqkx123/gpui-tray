@@ -10,12 +10,20 @@ use gpui_tray::*;
 
 actions!(tray_demo, [ShowWindow, ToggleAutoStart, Quit]);
 
-struct DemoApp {
+/// Shared demo state the tray menu and the window both read.
+#[derive(Default)]
+struct DemoState {
     auto_start: bool,
+    main_window: std::sync::Mutex<Option<AnyWindowHandle>>,
 }
 
+impl gpui::Global for DemoState {}
+
+struct DemoApp;
+
 impl Render for DemoApp {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let state = cx.global::<DemoState>();
         div()
             .size_full()
             .flex()
@@ -24,11 +32,11 @@ impl Render for DemoApp {
             .justify_center()
             .gap_2()
             .child("GPUI Tray Demo")
-            .child(format!("Launch at login: {}", self.auto_start))
+            .child(format!("Launch at login: {}", state.auto_start))
     }
 }
 
-fn make_icon() -> TrayIconData {
+fn make_icon() -> Result<TrayIcon, TrayError> {
     let size = 32u32;
     let mut rgba = Vec::with_capacity((size * size * 4) as usize);
     let r = size as f32 / 2.0;
@@ -45,32 +53,65 @@ fn make_icon() -> TrayIconData {
             rgba.extend_from_slice(&[cr, cg, cb, ca]);
         }
     }
-    TrayIconData::new(size, size, rgba)
+    TrayIcon::bitmap(size, size, 1, rgba)
 }
 
 fn main() {
     gpui_kit::application().run(|cx| {
         gpui_kit::init(cx);
+        cx.set_global(DemoState::default());
 
-        let tray = Tray::new(cx).expect("failed to create tray");
-        tray.set_tooltip(Some("GPUI Tray Demo".into()));
-        tray.set_icon(Some(make_icon()));
+        // Action handlers: the tray menu dispatches through the normal GPUI
+        // action pipeline, so these serve tray clicks and keybindings alike.
+        cx.on_action(|_: &ShowWindow, cx| {
+            let handle = cx.global::<DemoState>().main_window.lock().unwrap().clone();
+            if let Some(handle) = handle {
+                handle
+                    .update(cx, |_, window, cx| {
+                        window.activate_window();
+                        cx.activate(true);
+                    })
+                    .ok();
+            }
+        });
+        cx.on_action(|_: &ToggleAutoStart, cx| {
+            let state = cx.global_mut::<DemoState>();
+            state.auto_start = !state.auto_start;
+        });
+        cx.on_action(|_: &Quit, cx| {
+            cx.quit();
+        });
 
-        // Left click restores the window; the menu is also available via right click.
-        tray.set_left_click_action(LeftClick::Action(Arc::new(ShowWindow)));
+        let icon = make_icon().expect("icon");
 
-        tray.set_menu(tray_menu(|m| {
+        // Left click restores the window; the menu is also available via right
+        // click.
+        let tray = Tray::new(
+            cx,
+            TrayOptions::builder("tray-demo")
+                .with_left_click(LeftClick::Action(Arc::new(ShowWindow)))
+                .with_tooltip("GPUI Tray Demo")
+                .with_icon(icon)
+                .build(),
+        )
+        .expect("failed to create tray");
+
+        tray.set_menu(cx, tray_menu(|m| {
             m.action(ShowWindow, "Show Window");
             m.separator();
             m.check(false, ToggleAutoStart, "Launch at Login");
             m.separator();
             m.action(Quit, "Quit");
-        }));
+        }))
+        .expect("failed to set menu");
 
-        let _window = gpui_kit::open_window(WindowOptions::default(), cx, |_, cx| {
-            cx.new(|_| DemoApp { auto_start: false })
+        let window = gpui_kit::open_window(WindowOptions::default(), cx, |_, cx| {
+            cx.new(|_| DemoApp)
         })
         .expect("failed to open window");
+
+        cx.global_mut::<DemoState>().main_window =
+            std::sync::Mutex::new(Some(window.0));
 
         println!("Tray available: {}", tray.is_available());
     });

@@ -16,8 +16,9 @@
 //! | Windows  | `tray-icon` (Shell_NotifyIcon)       |
 //!
 //! If the platform tray is unavailable (e.g. GNOME without the AppIndicator
-//! extension) [`Tray::is_available`] returns `false` and the application starts
-//! normally — the tray never blocks startup.
+//! extension) [`Tray::availability`] reports [`TrayAvailability::Unavailable`]
+//! and the application starts normally — the tray never blocks startup. Hiding
+//! the icon with [`Tray::set_visible`] never changes availability.
 //!
 //! ## GPUI flavors
 //!
@@ -37,13 +38,22 @@
 //! fn main() {
 //!     gpui_kit::application().run(|cx| {
 //!         gpui_kit::init(cx);
-//!         let tray = Tray::new(cx).expect("tray");
-//!         tray.set_tooltip(Some("Demo"));
-//!         tray.set_menu(tray_menu(|m| {
-//!             m.action(ShowWindow, "Show Window");
-//!             m.separator();
-//!             m.action(Quit, "Quit");
-//!         }));
+//!         let tray = Tray::new(
+//!             cx,
+//!             TrayOptions::builder("demo.tray")
+//!                 .with_tooltip("Demo")
+//!                 .build(),
+//!         )
+//!         .expect("tray");
+//!         tray.set_menu(
+//!             cx,
+//!             tray_menu(|m| {
+//!                 m.action(ShowWindow, "Show Window");
+//!                 m.separator();
+//!                 m.action(Quit, "Quit");
+//!             }),
+//!         )
+//!         .expect("menu");
 //!     });
 //! }
 //! ```
@@ -64,35 +74,57 @@ extern crate gpui_kit_backend as gpui;
 extern crate gpui_fast_backend as gpui;
 
 pub mod backend;
+pub mod error;
 pub mod event;
 pub mod icon;
 pub mod menu;
+mod options;
 pub mod platform;
+mod runtime;
 
 pub use backend::TrayBackend;
-pub use event::TrayEvent;
-pub use icon::{TrayIconData, TrayIconRef};
-pub use menu::{
-    tray_menu, AnyAction, MenuItemId, TrayItem, TrayMenu, TrayMenuBuilder, TrayMenuItem, TraySubmenu,
+pub use error::{TrayAvailability, TrayError, TrayUnavailableReason};
+pub use event::{
+    TrayButton, TrayButtonState, TrayEvent, TrayPoint, TrayRect, TrayScrollOrientation, TraySize,
 };
+pub use icon::{TrayIcon, TrayIconBitmap, TrayIconBitmapBuilder, TrayIconImage, TrayIconName};
+pub use menu::{
+    tray_menu, AnyAction, ResolvedEntry, ResolvedItem, ResolvedMenu, ResolvedSubmenu, TrayEntry,
+    TrayItem, TrayItemBuilder, TrayItemId, TrayMenu, TrayMenuBuilder, TraySubmenu,
+};
+pub use options::{TrayId, TrayOptions, TrayOptionsBuilder};
 pub use platform::PlatformTrayBackend;
 
+use std::marker::PhantomData;
+use std::rc::Rc;
 use std::sync::Arc;
 
-use gpui::{App, SharedString};
+use gpui::{App, Entity, SharedString, Subscription};
+
+use runtime::{RuntimeShared, TrayRuntime};
 
 /// Behavior triggered when the tray icon is activated (typically a left click).
+///
+/// Fixed at creation time through [`TrayOptionsBuilder::with_left_click`]:
+/// the Linux backend bakes the choice into the StatusNotifierItem at
+/// registration, so it cannot change while the tray exists. To change the
+/// behavior, [`Tray::remove`] the tray and create a new one.
 pub enum LeftClick {
-    /// Open the tray menu. On Linux the desktop shell draws the menu (it is also
-    /// reachable via right click); on macOS/Windows the left click opens it.
+    /// The left click does nothing.
+    None,
+    /// Open the tray menu. On Linux the desktop shell draws the menu; on
+    /// macOS/Windows the left click opens it. The menu stays reachable via
+    /// right click.
     Menu,
     /// Dispatch an action when the tray icon is activated.
     Action(AnyAction),
 }
 
+/// Clone support: the stored action is shared behind an `Arc`.
 impl Clone for LeftClick {
     fn clone(&self) -> Self {
         match self {
+            LeftClick::None => LeftClick::None,
             LeftClick::Menu => LeftClick::Menu,
             LeftClick::Action(a) => LeftClick::Action(Arc::clone(a)),
         }
@@ -101,19 +133,22 @@ impl Clone for LeftClick {
 
 /// A handle to the system tray.
 ///
-/// Holds the concrete backend of the current platform (behind an `Arc`), so
-/// calls dispatch statically. Cheaply cloneable, and bound to the thread that
-/// created it, like every other handle into application state: the native
-/// handles behind it belong to that thread. Must be created inside
+/// Owns the runtime: the platform backend, its bridge task, the dispatch
+/// handler table and the availability state. Cheaply cloneable — clones share
+/// one runtime. The tray belongs to the main thread, like every other handle
+/// into application state; the type is deliberately `!Send` so platform
+/// threading constraints are enforced at compile time. Must be created inside
 /// `application().run(|cx| …)` on the main thread.
 pub struct Tray {
-    backend: PlatformTrayBackend,
+    runtime: Arc<TrayRuntime>,
+    _main_thread: PhantomData<Rc<()>>,
 }
 
 impl Clone for Tray {
     fn clone(&self) -> Self {
         Self {
-            backend: self.backend.clone(),
+            runtime: Arc::clone(&self.runtime),
+            _main_thread: PhantomData,
         }
     }
 }
@@ -122,40 +157,144 @@ impl Tray {
     /// Create the tray on the current platform.
     ///
     /// Never blocks on desktop startup. If the platform tray is unavailable,
-    /// [`Tray::is_available`] returns `false` and the app runs normally.
-    pub fn new(cx: &mut App) -> anyhow::Result<Self> {
+    /// [`Tray::availability`] reports it and the app runs normally.
+    pub fn new(cx: &mut App, options: TrayOptions) -> Result<Self, TrayError> {
+        let shared = Arc::new(RuntimeShared::new(&options));
+        let backend = PlatformTrayBackend::new(cx, &options, Arc::clone(&shared))?;
         Ok(Self {
-            backend: PlatformTrayBackend::new(cx)?,
+            runtime: Arc::new(TrayRuntime {
+                options,
+                backend,
+                shared,
+            }),
+            _main_thread: PhantomData,
         })
     }
 
-    /// Whether a working tray is present on this platform/session.
+    /// The stable identifier of this tray.
+    pub fn id(&self) -> &TrayId {
+        &self.runtime.options.id
+    }
+
+    /// The current availability state.
+    pub fn availability(&self) -> TrayAvailability {
+        self.runtime.shared.availability()
+    }
+
+    /// Whether a working tray is present on this platform/session. True only
+    /// while availability is [`TrayAvailability::Available`].
     pub fn is_available(&self) -> bool {
-        self.backend.is_available()
+        self.availability().is_available()
+    }
+
+    /// Whether the icon is currently shown. Independent of availability.
+    pub fn is_visible(&self) -> bool {
+        self.runtime.shared.is_visible()
+    }
+
+    /// The last reported icon rectangle, when the platform provides one
+    /// (Windows). Linux does not report the rectangle.
+    pub fn rect(&self) -> Option<TrayRect> {
+        self.runtime.shared.rect()
+    }
+
+    /// Subscribe to tray events. The handler runs on the main thread, after
+    /// any configured action/callback dispatch.
+    pub fn on_event(
+        &self,
+        _cx: &mut App,
+        handler: impl FnMut(TrayEvent, &mut App) + Send + 'static,
+    ) -> Subscription {
+        let shared = Arc::clone(&self.runtime.shared);
+        let listener_id = shared.add_listener(Box::new(handler));
+        let release_shared = Arc::clone(&shared);
+        Subscription::new(move || {
+            release_shared.remove_listener(listener_id);
+        })
     }
 
     /// Show or hide the tray icon.
-    pub fn set_visible(&self, visible: bool) {
-        self.backend.set_visible(visible);
+    ///
+    /// Visibility never changes availability: a hidden tray still reports
+    /// [`TrayAvailability::Available`].
+    pub fn set_visible(&self, _cx: &mut App, visible: bool) -> Result<(), TrayError> {
+        self.runtime.shared.set_visible(visible);
+        self.backend().set_visible(visible)
     }
 
-    /// Set the tray icon from raw RGBA bitmap data (or clear it with `None`).
-    pub fn set_icon(&self, icon: Option<TrayIconData>) {
-        self.backend.set_icon(icon);
+    /// Set the tray icon (or clear it with `None`).
+    pub fn set_icon(&self, _cx: &mut App, icon: Option<TrayIcon>) -> Result<(), TrayError> {
+        self.backend().set_icon(icon)
     }
 
-    /// Set the hover tooltip text.
-    pub fn set_tooltip(&self, tooltip: Option<SharedString>) {
-        self.backend.set_tooltip(tooltip);
+    /// Set the hover tooltip text (or clear it with `None`).
+    pub fn set_tooltip(&self, _cx: &mut App, tooltip: Option<SharedString>) -> Result<(), TrayError> {
+        self.backend().set_tooltip(tooltip)
+    }
+
+    /// Set the text shown next to the icon where the platform supports it
+    /// (Linux, macOS).
+    pub fn set_title(&self, _cx: &mut App, title: Option<SharedString>) -> Result<(), TrayError> {
+        self.backend().set_title(title)
     }
 
     /// Replace the entire menu.
-    pub fn set_menu(&self, menu: TrayMenu) {
-        self.backend.set_menu(menu);
+    ///
+    /// The menu is resolved into a render snapshot plus a handler table before
+    /// it reaches the backend. Duplicate item ids are rejected here.
+    pub fn set_menu(&self, _cx: &mut App, menu: TrayMenu) -> Result<(), TrayError> {
+        let (resolved, handlers) = menu::resolve_menu(menu)?;
+        self.runtime.shared.replace_handlers(handlers);
+        self.backend().set_menu(&resolved)
     }
 
-    /// Configure what a tray icon activation (left click) does.
-    pub fn set_left_click_action(&self, behavior: LeftClick) {
-        self.backend.set_left_click_action(behavior);
+    /// Bind the menu to an entity: the menu is rebuilt from the supplied
+    /// closure every time the entity notifies, so checked states and labels
+    /// follow application state without manual `set_menu` calls.
+    ///
+    /// macOS rebuilds the native menu on each notify; if a menu is open the
+    /// update applies on its next open. On Windows an open native menu keeps
+    /// its contents until the next open.
+    pub fn bind_menu<T: 'static>(
+        &self,
+        cx: &mut App,
+        entity: Entity<T>,
+        build: impl Fn(&T, &mut App) -> TrayMenu + Send + 'static,
+    ) -> Subscription {
+        let this = self.clone();
+        cx.observe(&entity, move |entity, cx| {
+            entity.update(cx, |state, cx| {
+                let menu = build(state, cx);
+                let _ = this.set_menu(cx, menu);
+            });
+        })
+    }
+
+    /// Open the menu programmatically, where the platform supports it.
+    pub fn show_menu(&self, _cx: &mut App) -> Result<(), TrayError> {
+        self.backend().show_menu()
+    }
+
+    /// Mark the icon as requesting attention, where the platform supports it
+    /// (Linux `NeedsAttention`).
+    pub fn request_attention(&self, _cx: &mut App, attention: bool) -> Result<(), TrayError> {
+        self.backend().request_attention(attention)
+    }
+
+    /// Remove the tray deterministically: the native icon disappears, the
+    /// bridge task stops, and no further events are delivered. Subsequent
+    /// operations on any clone report [`TrayError::Closed`].
+    ///
+    /// Dropping the last [`Tray`] handle also cancels the bridge task, but
+    /// native icon removal is best effort then; call `remove` when the tray
+    /// must disappear at a defined point (e.g. application quit).
+    pub fn remove(self, _cx: &mut App) {
+        self.runtime.shutdown();
+    }
+
+    fn backend(&self) -> &PlatformTrayBackend {
+        // Late events for a closed tray are dropped by the shared state; the
+        // native calls themselves are harmless after shutdown.
+        &self.runtime.backend
     }
 }

@@ -34,20 +34,30 @@ fn main() {
     gpui_kit::application().run(|cx| {
         gpui_kit::init(cx);
 
-        let tray = Tray::new(cx).expect("failed to create tray");
-        tray.set_tooltip(Some("Demo".into()));
-        tray.set_left_click_action(LeftClick::Action(std::sync::Arc::new(ShowWindow)));
-        tray.set_menu(tray_menu(|m| {
+        let tray = Tray::new(
+            cx,
+            TrayOptions::builder("demo.tray")
+                .with_left_click(LeftClick::Action(std::sync::Arc::new(ShowWindow)))
+                .with_tooltip("Demo")
+                .build(),
+        )
+        .expect("failed to create tray");
+        tray.set_menu(cx, tray_menu(|m| {
             m.action(ShowWindow, "Show Window");
             m.separator();
             m.action(Quit, "Quit");
-        }));
+        }))
+        .expect("failed to set menu");
     });
 }
 ```
 
 `Tray::new` must run on the GPUI thread, inside
 `application().run(|cx| ..)`, like every other handle into application state.
+The tray is `!Send`: the type enforces the main-thread constraint of the
+native handles behind it. The left-click behavior is fixed at creation time
+through `TrayOptions` — the Linux backend bakes it into the StatusNotifierItem
+when it registers.
 
 ## GPUI flavors
 
@@ -71,9 +81,9 @@ gpui-tray = { version = "0.1", default-features = false, features = ["gpui-fast"
 
 | Platform | Backend                        | Left click                    | Menu           |
 | -------- | ------------------------------ | ----------------------------- | -------------- |
-| Linux    | `ksni` (StatusNotifierItem)    | restore the window            | `DBusMenu`     |
-| macOS    | `objc2` `NSStatusItem`         | open the menu (configurable)  | `NSMenu`        |
-| Windows  | `tray-icon` (`Shell_NotifyIcon`) | open the menu (configurable) | `HMENU`         |
+| Linux    | `ksni` (StatusNotifierItem)    | menu / action, fixed at creation (`TrayOptions`) | `DBusMenu`     |
+| macOS    | `objc2` `NSStatusItem`         | menu / action, fixed at creation (`TrayOptions`) | `NSMenu`        |
+| Windows  | `tray-icon` (`Shell_NotifyIcon`) | menu / action, fixed at creation (`TrayOptions`) | `HMENU`         |
 
 On Linux the desktop shell draws the menu, so the tray icon only appears when
 the session provides a StatusNotifierItem host: KDE Plasma does, GNOME needs

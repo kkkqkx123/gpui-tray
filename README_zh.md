@@ -29,20 +29,28 @@ fn main() {
     gpui_kit::application().run(|cx| {
         gpui_kit::init(cx);
 
-        let tray = Tray::new(cx).expect("failed to create tray");
-        tray.set_tooltip(Some("Demo".into()));
-        tray.set_left_click_action(LeftClick::Action(std::sync::Arc::new(ShowWindow)));
-        tray.set_menu(tray_menu(|m| {
+        let tray = Tray::new(
+            cx,
+            TrayOptions::builder("demo.tray")
+                .with_left_click(LeftClick::Action(std::sync::Arc::new(ShowWindow)))
+                .with_tooltip("Demo")
+                .build(),
+        )
+        .expect("failed to create tray");
+        tray.set_menu(cx, tray_menu(|m| {
             m.action(ShowWindow, "Show Window");
             m.separator();
             m.action(Quit, "Quit");
-        }));
+        }))
+        .expect("failed to set menu");
     });
 }
 ```
 
 `Tray::new` 必须在 GPUI 线程上、在 `application().run(|cx| ..)` 内部创建，
-与其他进入应用状态的句柄一致。
+与其他进入应用状态的句柄一致。`Tray` 是 `!Send` 的：类型层面强制了原生句柄的
+主线程约束。左键行为通过 `TrayOptions` 在创建期固定——Linux 后端在注册
+StatusNotifierItem 时就已写入该行为。
 
 ## GPUI flavor
 
@@ -64,9 +72,9 @@ gpui-tray = { version = "0.1", default-features = false, features = ["gpui-fast"
 
 | 平台   | 后端                              | 左键行为             | 菜单         |
 | ------ | --------------------------------- | -------------------- | ------------ |
-| Linux  | `ksni`（StatusNotifierItem）      | 恢复窗口             | `DBusMenu`   |
-| macOS  | `objc2` `NSStatusItem`            | 弹出菜单（可配置）   | `NSMenu`     |
-| Windows | `tray-icon`（`Shell_NotifyIcon`） | 弹出菜单（可配置）   | `HMENU`      |
+| Linux  | `ksni`（StatusNotifierItem）      | 菜单 / Action，创建期经 `TrayOptions` 固定 | `DBusMenu`   |
+| macOS  | `objc2` `NSStatusItem`            | 菜单 / Action，创建期经 `TrayOptions` 固定 | `NSMenu`     |
+| Windows | `tray-icon`（`Shell_NotifyIcon`） | 菜单 / Action，创建期经 `TrayOptions` 固定 | `HMENU`      |
 
 Linux 上菜单由桌面 Shell 绘制，因此只有会话提供了 StatusNotifierItem 宿主时托盘图标才会出现：
 KDE Plasma 原生支持，GNOME 需要安装 AppIndicator 扩展。

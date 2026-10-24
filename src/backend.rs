@@ -2,35 +2,48 @@
 
 use gpui::SharedString;
 
-use crate::icon::TrayIconData;
-use crate::menu::TrayMenu;
-use crate::LeftClick;
+use crate::error::TrayError;
+use crate::icon::TrayIcon;
+use crate::menu::ResolvedMenu;
 
 /// A platform tray implementation.
 ///
-/// [`Tray`] forwards to the concrete backend of the current platform through
-/// [`crate::PlatformTrayBackend`]. The native handles a backend owns belong to
-/// the thread that created them, so a backend is not `Send`.
+/// [`crate::Tray`] forwards to the concrete backend of the current platform
+/// through [`crate::platform::PlatformTrayBackend`]. The native handles a
+/// backend owns belong to the thread that created them, so a backend is not
+/// `Send`. Every mutation is fallible: backends report failures instead of
+/// silently succeeding.
 pub trait TrayBackend {
-    /// Whether a working tray is present on this platform/session.
+    /// Whether the backend registered successfully.
     fn is_available(&self) -> bool;
 
-    /// Show or hide the tray icon.
-    fn set_visible(&self, visible: bool);
+    /// Show or hide the tray icon. Must not affect availability.
+    fn set_visible(&self, visible: bool) -> Result<(), TrayError>;
 
-    /// Set the tray icon from raw RGBA bitmap data (or clear it with `None`).
-    fn set_icon(&self, icon: Option<TrayIconData>);
+    /// Set the tray icon (or clear it with `None`).
+    fn set_icon(&self, icon: Option<TrayIcon>) -> Result<(), TrayError>;
 
-    /// Set the hover tooltip text.
-    fn set_tooltip(&self, tooltip: Option<SharedString>);
+    /// Set the hover tooltip text (or clear it with `None`).
+    fn set_tooltip(&self, tooltip: Option<SharedString>) -> Result<(), TrayError>;
 
-    /// Replace the entire menu.
-    fn set_menu(&self, menu: TrayMenu);
+    /// Set the text shown next to the icon where the platform supports it
+    /// (Linux, macOS); unsupported platforms report
+    /// [`TrayError::UnsupportedPlatform`].
+    fn set_title(&self, title: Option<SharedString>) -> Result<(), TrayError>;
 
-    /// Configure what a tray icon activation (left click) does.
-    fn set_left_click_action(&self, behavior: LeftClick);
+    /// Replace the menu with a resolved snapshot. Dispatch handlers are
+    /// already stored in the runtime; backends only receive render data.
+    fn set_menu(&self, menu: &ResolvedMenu) -> Result<(), TrayError>;
 
-    /// Convenience used by backends to nudge the native presentation after a state
-    /// change. The default is a no-op.
-    fn shutdown(&self) {}
+    /// Open the menu programmatically, where the platform supports it.
+    fn show_menu(&self) -> Result<(), TrayError>;
+
+    /// Mark the icon as requesting attention, where the platform supports it
+    /// (Linux `NeedsAttention`).
+    fn request_attention(&self, attention: bool) -> Result<(), TrayError>;
+
+    /// Remove the native icon and stop the backend service. Called by
+    /// [`crate::Tray::remove`]; there is no default implementation so every
+    /// backend must decide how to tear itself down.
+    fn shutdown(&self);
 }

@@ -26,6 +26,9 @@ use crate::runtime::{route_event, make_rect, BackendSignal, RuntimeShared};
 pub struct WindowsBackend {
     tray: TrayIcon,
     tray_id: TrayId,
+    // Held so the bridge task lives as long as the backend; dropped when the
+    // backend is dropped, which cancels the loop.
+    _bridge: gpui::Task<()>,
     #[allow(dead_code)]
     shared: Arc<RuntimeShared>,
 }
@@ -346,10 +349,10 @@ pub fn create_backend(
         }
     });
 
-    let _unused = bridge;
     Ok(WindowsBackend {
         tray,
         tray_id: options.id().clone(),
+        _bridge: bridge,
         shared,
     })
 }

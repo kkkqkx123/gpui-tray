@@ -83,6 +83,9 @@ pub struct MacBackend {
     status_item: Retained<NSStatusItem>,
     handler: Retained<MacHandler>,
     shared: Arc<RuntimeShared>,
+    // Held so the bridge task lives as long as the backend; dropped when the
+    // backend is dropped, which cancels the loop.
+    _bridge: gpui::Task<()>,
 }
 
 /// Convert sRGBA bytes into an `NSImage` sized in logical points.
@@ -227,7 +230,6 @@ pub fn create_backend(
         let shared = shared_task;
         let rx = rx;
         async move {
-            shared.set_availability(crate::error::TrayAvailability::Available);
             while let Ok(signal) = rx.recv_async().await {
                 if shared.is_closed() {
                     break;
@@ -280,11 +282,11 @@ pub fn create_backend(
         }
     }
 
-    let _unused = bridge;
     Ok(MacBackend {
         status_item,
         handler,
         shared,
+        _bridge: bridge,
     })
 }
 

@@ -12,19 +12,20 @@ use std::sync::{Arc, OnceLock};
 
 use gpui::{App, AsyncApp, Keystroke, Modifiers, SharedString};
 use parking_lot::Mutex;
-use tray_icon::menu::{Accelerator, CheckMenuItem, IsMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
-use tray_icon::{MouseButton, MouseButtonState, Rect, TrayIcon, TrayIconBuilder, TrayIconEvent};
+use tray_icon::menu::accelerator::{Accelerator, Code, Modifiers as MudaModifiers};
+use tray_icon::menu::{CheckMenuItem, IsMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
+use tray_icon::{MouseButton, MouseButtonState, Rect, TrayIcon as NativeTrayIcon, TrayIconBuilder, TrayIconEvent};
 
 use crate::backend::TrayBackend;
 use crate::error::TrayError;
-use crate::event::{TrayButton, TrayButtonState, TrayEvent, TrayRect, TrayScrollOrientation};
+use crate::event::{TrayButton, TrayButtonState, TrayEvent, TrayRect};
 use crate::icon::TrayIcon;
-use crate::menu::{ResolvedEntry, ResolvedItem, ResolvedMenu, TrayItemId};
+use crate::menu::{ResolvedEntry, ResolvedMenu, TrayItemId};
 use crate::options::{TrayId, TrayOptions};
 use crate::runtime::{route_event, make_rect, BackendSignal, RuntimeShared};
 
 pub struct WindowsBackend {
-    tray: TrayIcon,
+    tray: NativeTrayIcon,
     tray_id: TrayId,
     // Held so the bridge task lives as long as the backend; dropped when the
     // backend is dropped, which cancels the loop.
@@ -54,8 +55,8 @@ fn sender_for(tray_id: &str) -> Option<(Arc<RuntimeShared>, flume::Sender<Backen
 /// touching GPUI happens on the main thread in the bridge task.
 fn ensure_pumps() {
     PUMPS_INSTALLED.get_or_init(|| {
-        TrayIconEvent::set_event_handler(|event| route_icon_event(event));
-        MenuEvent::set_event_handler(|event| route_menu_event(event));
+        TrayIconEvent::set_event_handler(Some(|event| route_icon_event(event)));
+        MenuEvent::set_event_handler(Some(|event| route_menu_event(event)));
     });
 }
 
@@ -135,20 +136,18 @@ fn convert_state(state: MouseButtonState) -> TrayButtonState {
     }
 }
 
-fn convert_position(position: tray_icon::PhysPosition) -> crate::event::TrayPoint {
+fn convert_position(position: tray_icon::dpi::PhysicalPosition<f64>) -> crate::event::TrayPoint {
     crate::runtime::make_point(position.x, position.y, 1.0)
 }
 
-fn convert_rect(rect: Option<Rect>) -> Option<TrayRect> {
-    rect.map(|r| {
-        make_rect(
-            r.position.x,
-            r.position.y,
-            r.size.width,
-            r.size.height,
-            1.0,
-        )
-    })
+fn convert_rect(rect: Rect) -> Option<TrayRect> {
+    Some(make_rect(
+        rect.position.x,
+        rect.position.y,
+        rect.size.width as f64,
+        rect.size.height as f64,
+        1.0,
+    ))
 }
 
 /// A menu that items can be appended to.
@@ -214,25 +213,24 @@ fn fill_menu(sink: &dyn MenuSink, tray_id: &str, entries: &[ResolvedEntry]) {
 /// Map a GPUI `Keystroke` to a muda `Accelerator` for display in the menu.
 fn accelerator_of(k: &Keystroke) -> Option<Accelerator> {
     let modifiers: Modifiers = k.modifiers;
-    let mut mods = tray_icon::menu::Modifiers::empty();
+    let mut mods = MudaModifiers::empty();
     if modifiers.control {
-        mods |= tray_icon::menu::Modifiers::CONTROL;
+        mods |= MudaModifiers::CONTROL;
     }
     if modifiers.alt {
-        mods |= tray_icon::menu::Modifiers::ALT;
+        mods |= MudaModifiers::ALT;
     }
     if modifiers.shift {
-        mods |= tray_icon::menu::Modifiers::SHIFT;
+        mods |= MudaModifiers::SHIFT;
     }
     if modifiers.platform {
-        mods |= tray_icon::menu::Modifiers::SUPER;
+        mods |= MudaModifiers::SUPER;
     }
     let code = muda_key_code(&k.key)?;
     Some(Accelerator::new(Some(mods), code))
 }
 
-fn muda_key_code(key: &str) -> Option<tray_icon::menu::Code> {
-    use tray_icon::menu::Code;
+fn muda_key_code(key: &str) -> Option<Code> {
     match key {
         "a" => Some(Code::KeyA),
         "b" => Some(Code::KeyB),
@@ -300,7 +298,8 @@ pub fn create_backend(
 
     let menu_on_left_click = matches!(options.left_click(), crate::LeftClick::Menu);
     let tray_menu = build_menu(options.id().as_str(), &ResolvedMenu::empty());
-    let mut builder = TrayIconBuilder::with_id(options.id().as_str())
+    let mut builder = TrayIconBuilder::new()
+        .with_id(options.id().as_str())
         .with_menu(Box::new(tray_menu))
         .with_menu_on_left_click(menu_on_left_click);
     if let Some(tooltip) = options.tooltip() {
@@ -313,13 +312,13 @@ pub fn create_backend(
                 image.pixel_width(),
                 image.pixel_height(),
             )
-            .map_err(|e| anyhow::anyhow!("icon: {e}"))?;
+            .map_err(|e| crate::runtime::native_error(e))?;
             builder = builder.with_icon(icon).with_icon_as_template(bitmap.is_templated());
         }
     }
     let tray = builder
         .build()
-        .map_err(|e| anyhow::anyhow!("failed to create tray icon: {e}"))?;
+        .map_err(|e| crate::runtime::native_error(e))?;
 
     let app = cx.to_async();
     let shared_task = Arc::clone(&shared);
@@ -408,15 +407,13 @@ impl TrayBackend for WindowsBackend {
 
     fn set_menu(&self, menu: &ResolvedMenu) -> Result<(), TrayError> {
         let native = build_menu(self.tray_id.as_str(), menu);
-        self.tray
-            .set_menu(Some(Box::new(native)))
-            .map_err(|e| crate::runtime::native_error(e))
+        self.tray.set_menu(Some(Box::new(native)));
+        Ok(())
     }
 
     fn show_menu(&self) -> Result<(), TrayError> {
-        self.tray
-            .show_menu()
-            .map_err(|e| crate::runtime::native_error(e))
+        // tray-icon 0.20 offers no programmatic menu popup on Windows.
+        Err(TrayError::UnsupportedPlatform)
     }
 
     fn request_attention(&self, _attention: bool) -> Result<(), TrayError> {

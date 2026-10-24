@@ -7,7 +7,6 @@
 
 #![cfg(target_os = "macos")]
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use objc2::rc::Retained;
@@ -17,17 +16,16 @@ use objc2_app_kit::{
     NSBitmapImageRep, NSCalibratedRGBColorSpace, NSControlStateValueOff, NSControlStateValueOn,
     NSImage, NSMenu, NSMenuItem, NSStatusBar, NSStatusItem,
 };
-use objc2_foundation::{CGSize, CGFloat, NSString};
+use objc2_foundation::{NSSize, NSString};
 
 use flume::Sender;
 use gpui::{App, AsyncApp, Keystroke, Modifiers, SharedString};
-use parking_lot::Mutex;
 
 use crate::backend::TrayBackend;
 use crate::error::TrayError;
 use crate::event::{TrayButton, TrayButtonState, TrayEvent};
 use crate::icon::TrayIcon;
-use crate::menu::{ResolvedEntry, ResolvedItem, ResolvedMenu, TrayItemId};
+use crate::menu::{ResolvedEntry, ResolvedMenu, TrayItemId};
 use crate::options::TrayOptions;
 use crate::runtime::{route_event, BackendSignal, RuntimeShared};
 
@@ -98,7 +96,7 @@ fn make_ns_image(icon: &crate::icon::TrayIconBitmap) -> Option<Retained<NSImage>
     // bytes in — handing AppKit a foreign buffer would risk a dangling read.
     let rep = unsafe {
         NSBitmapImageRep::initWithBitmapDataPlanes_pixelsWide_pixelsHigh_bitsPerSample_samplesPerPixel_hasAlpha_isPlanar_colorSpaceName_bytesPerRow_bitsPerPixel(
-            NSBitmapImageRep::alloc(mtm),
+            NSBitmapImageRep::alloc(),
             std::ptr::null_mut(),
             pixels,
             rows,
@@ -117,13 +115,13 @@ fn make_ns_image(icon: &crate::icon::TrayIconBitmap) -> Option<Retained<NSImage>
             std::ptr::copy_nonoverlapping(image.rgba().as_ptr(), dst, image.rgba().len());
         }
     }
-    let ns_image = NSImage::new(mtm)?;
+    let ns_image = NSImage::new();
     ns_image.addRepresentation(&rep);
     // Logical size in points so the icon renders at the right bar height on
     // Retina displays.
-    ns_image.setSize_(CGSizeMake(
-        image.width() as CGFloat,
-        image.height() as CGFloat,
+    ns_image.setSize(NSSize::new(
+        image.width() as f64,
+        image.height() as f64,
     ));
     Some(ns_image)
 }
@@ -194,16 +192,16 @@ fn key_equivalent(k: &Keystroke) -> (String, objc2_app_kit::NSEventModifierFlags
     let modifiers: Modifiers = k.modifiers;
     let mut flags = objc2_app_kit::NSEventModifierFlags(0);
     if modifiers.control {
-        flags |= objc2_app_kit::NSEventModifierFlagControl;
+        flags |= objc2_app_kit::NSEventModifierFlags::Control;
     }
     if modifiers.alt {
-        flags |= objc2_app_kit::NSEventModifierFlagOption;
+        flags |= objc2_app_kit::NSEventModifierFlags::Option;
     }
     if modifiers.shift {
-        flags |= objc2_app_kit::NSEventModifierFlagShift;
+        flags |= objc2_app_kit::NSEventModifierFlags::Shift;
     }
     if modifiers.platform {
-        flags |= objc2_app_kit::NSEventModifierFlagCommand;
+        flags |= objc2_app_kit::NSEventModifierFlags::Command;
     }
     (k.key.to_lowercase(), flags)
 }
@@ -214,7 +212,7 @@ pub fn create_backend(
     shared: Arc<RuntimeShared>,
 ) -> Result<MacBackend, TrayError> {
     let Some(mtm) = MainThreadMarker::new() else {
-        anyhow::bail!("the system tray needs the main thread, which the application is not on");
+        return Err(TrayError::WrongThread);
     };
 
     let (tx, rx) = flume::unbounded::<BackendSignal>();
@@ -277,7 +275,7 @@ pub fn create_backend(
                     button.setAction(Some(sel!(statusItemClicked:)));
                     button.setTarget(Some(&handler));
                 }
-                button.sendActionOn(objc2_app_kit::NSEventMaskLeftMouseUp);
+                button.sendActionOn(objc2_app_kit::NSEventMask::LeftMouseUp);
             }
         }
     }

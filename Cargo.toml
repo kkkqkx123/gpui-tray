@@ -27,8 +27,8 @@ gpui-fast = ["dep:gpui-fast-backend"]
 # `gpui-kit` is the GPUI Kit snapshot, pinned to the exact release the
 # application resolves. A caret requirement would drift applications onto a
 # snapshot their `gpui::App` was not compiled against.
-gpui-kit-backend = { package = "gpui-pre", version = "=0.3.9", default-features = false, optional = true }
-gpui-fast-backend = { package = "gpui-fast", version = "0.1.10", default-features = false, optional = true }
+gpui-kit-backend = { package = "gpui-pre", version = "=0.3.10", default-features = false, optional = true }
+gpui-fast-backend = { package = "gpui-fast", version = "0.1.12", default-features = false, optional = true }
 anyhow = "1"
 log = "0.4"
 flume = "0.11"

@@ -1,6 +1,6 @@
 //! Tray demo: shows a system tray / menu-bar icon with a native menu, a generated
 //! icon, a tooltip, and left-click action wiring. Run with `cargo run
-//! --example tray_demo` on a desktop session that supports a tray (KDE/GNOME+
+//! -p tray_demo` on a desktop session that supports a tray (KDE/GNOME+
 //! AppIndicator on Linux, the menu bar on macOS, the taskbar on Windows).
 
 use std::sync::Arc;

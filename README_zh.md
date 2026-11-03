@@ -84,7 +84,7 @@ KDE Plasma 原生支持，GNOME 需要安装 AppIndicator 扩展。
 `examples/tray_demo` 展示了一个带原生菜单、生成图标、提示文字和左键联动的托盘图标：
 
 ```bash
-cargo run --example tray_demo
+cargo run -p tray_demo
 ```
 
 ## 许可证

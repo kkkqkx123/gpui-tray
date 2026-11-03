@@ -95,7 +95,7 @@ the AppIndicator extension.
 tooltip and left-click wiring:
 
 ```bash
-cargo run --example tray_demo
+cargo run -p tray_demo
 ```
 
 ## License

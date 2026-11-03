@@ -320,6 +320,17 @@ pub fn create_backend(
         .build()
         .map_err(|e| crate::runtime::native_error(e))?;
 
+    // `NIM_ADD` already succeeded synchronously; reflect that in the
+    // availability state before returning. Reporting it from the bridge
+    // task's first poll would let `Tray::is_available()` keep answering the
+    // initial `Registering` state to startup-time callers, because spawned
+    // tasks only run once the event loop starts — after the `run` closure.
+    crate::runtime::set_availability_and_notify(
+        &shared,
+        &tx,
+        crate::error::TrayAvailability::Available,
+    );
+
     let app = cx.to_async();
     let shared_task = Arc::clone(&shared);
     let bridge = cx.spawn(move |_cx: &mut AsyncApp| {
@@ -327,7 +338,6 @@ pub fn create_backend(
         let shared = shared_task;
         let rx = rx;
         async move {
-            shared.set_availability(crate::error::TrayAvailability::Available);
             while let Ok(signal) = rx.recv_async().await {
                 if shared.is_closed() {
                     break;

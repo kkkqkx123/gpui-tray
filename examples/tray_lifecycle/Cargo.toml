@@ -19,3 +19,10 @@ gpui-kit = ["gpui-tray/gpui-kit"]
 # GPUI Fast. It replaces the default backend, so it replaces the flavor
 # feature too: build it with `--no-default-features --features gpui-fast`.
 gpui-fast = ["gpui-tray/gpui-fast", "gpui-kit/gpui-fast"]
+
+[target.'cfg(windows)'.dependencies]
+raw-window-handle = "0.6"
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
+] }

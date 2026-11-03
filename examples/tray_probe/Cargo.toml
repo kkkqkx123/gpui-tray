@@ -1,0 +1,13 @@
+[package]
+name = "tray_probe"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Windows-only probe bypassing gpui-tray to isolate Shell_NotifyIcon placement"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+tray-icon = "0.20"
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
+] }

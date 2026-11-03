@@ -11,7 +11,7 @@ readme = "README.md"
 
 # This crate is an independent repository, not a gpui-kit workspace member.
 [workspace]
-members = ["examples/tray_demo", "examples/tray_lifecycle"]
+members = ["examples/tray_demo", "examples/tray_lifecycle", "examples/tray_probe"]
 
 [features]
 default = ["gpui-kit"]
@@ -44,14 +44,6 @@ objc2-foundation = "0.3"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 tray-icon = "0.20"
-
-# The `tray_probe` example pumps Win32 messages directly; the library itself
-# does not use the `windows` crate on this target.
-[target.'cfg(target_os = "windows")'.dev-dependencies]
-windows = { version = "0.62", features = [
-    "Win32_Foundation",
-    "Win32_UI_WindowsAndMessaging",
-] }
 
 [lints.rust]
 missing_docs = "warn"

@@ -2,11 +2,11 @@
 //! lifecycle demo's icon does not appear on this Windows 11 box.
 //!
 //! ```sh
-//! cargo run --example tray_probe               # plain registration, 30s pump
-//! cargo run --example tray_probe -- 10         # 10s variant
-//! cargo run --example tray_probe -- 30 --renotify
-//! cargo run --example tray_probe -- 15 --full          # all gpui-tray builder suspects
-//! cargo run --example tray_probe -- 15 --menu         # only the muda menu attach
+//! cargo run -p tray_probe               # plain registration, 30s pump
+//! cargo run -p tray_probe -- 10         # 10s variant
+//! cargo run -p tray_probe -- 30 --renotify
+//! cargo run -p tray_probe -- 15 --full          # all gpui-tray builder suspects
+//! cargo run -p tray_probe -- 15 --menu         # only the muda menu attach
 //! ```
 //!
 //! Every few seconds the probe reads `TrayIcon::rect()` (a

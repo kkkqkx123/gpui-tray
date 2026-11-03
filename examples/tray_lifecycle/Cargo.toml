@@ -1,0 +1,21 @@
+[package]
+name = "tray_lifecycle"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Manual verification for the gpui-tray window lifecycle paths: close-to-tray, pure tray mode, icon updates"
+
+[dependencies]
+# The published GPUI Kit release supplies the application shell and the GPUI
+# types. The tray crate must be built against the same GPUI, so the flavor
+# features below select one GPUI for both.
+gpui-kit = { version = "0.8", default-features = false }
+gpui-tray = { path = "../..", default-features = false }
+
+[features]
+default = ["gpui-kit"]
+# GPUI Kit's `gpui-pre` snapshot, the default backend.
+gpui-kit = ["gpui-tray/gpui-kit"]
+# GPUI Fast. It replaces the default backend, so it replaces the flavor
+# feature too: build it with `--no-default-features --features gpui-fast`.
+gpui-fast = ["gpui-tray/gpui-fast", "gpui-kit/gpui-fast"]

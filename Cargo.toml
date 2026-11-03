@@ -11,7 +11,7 @@ readme = "README.md"
 
 # This crate is an independent repository, not a gpui-kit workspace member.
 [workspace]
-members = ["examples/tray_demo"]
+members = ["examples/tray_demo", "examples/tray_lifecycle"]
 
 [features]
 default = ["gpui-kit"]
